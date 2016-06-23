@@ -1,18 +1,30 @@
 package org.openmrs.maven.plugins;
 
 import org.apache.commons.lang.StringUtils;
+import org.apache.maven.model.Model;
+import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
+import org.apache.maven.project.MavenProject;
+import org.apache.maven.shared.invoker.DefaultInvocationRequest;
+import org.apache.maven.shared.invoker.DefaultInvoker;
+import org.apache.maven.shared.invoker.InvocationRequest;
+import org.apache.maven.shared.invoker.InvocationResult;
+import org.apache.maven.shared.invoker.Invoker;
+import org.apache.maven.shared.invoker.MavenInvocationException;
 import org.openmrs.maven.plugins.model.Artifact;
 import org.openmrs.maven.plugins.model.Server;
 import org.openmrs.maven.plugins.utility.Project;
 import org.openmrs.maven.plugins.utility.SDKConstants;
 
 import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 import static org.twdata.maven.mojoexecutor.MojoExecutor.*;
 
@@ -73,11 +85,64 @@ public class Run extends AbstractTask {
 			}
 		}
 
+		try {
+			deployWatchedModules(server);
+		} catch (MavenInvocationException e) {
+			e.printStackTrace();
+		}
+
 		if (Boolean.FALSE.equals(fork)) {
 			new RunTomcat(serverId, port, wizard).execute();
 		} else {
 			runInFork(server);
 		}
+	}
+
+	private void deployWatchedModules(Server server) throws MojoFailureException, MojoExecutionException, MavenInvocationException {
+		Set<Project> watchedProject = server.getWatchedProjects();
+		for (Project module: watchedProject) {
+			File pomFile = new File(module.getPath(), "pom.xml");
+			MavenProject project = readPomFile(pomFile);
+			cleanInstallModule(module.getPath());
+			new Deploy(this).deployModule(project.getGroupId(), project.getArtifactId(), project.getVersion(), server);
+		}
+	}
+
+	private MavenProject readPomFile(File pomFile){
+		Model model = null;
+		FileReader reader = null;
+		MavenXpp3Reader mavenreader = new MavenXpp3Reader();
+		try {
+			reader = new FileReader(pomFile);
+			model = mavenreader.read(reader);
+			model.setPomFile(pomFile);
+		}catch(Exception ex){}
+
+		return new MavenProject(model);
+	}
+
+	private void cleanInstallModule(String directory) throws MojoFailureException {
+		String maven = "mvn";
+		if (System.getProperty("os.name").toLowerCase(Locale.ENGLISH).contains("windows")) {
+			maven = "mvn.bat";
+		}
+		List<String> commands = new ArrayList<String>();
+		commands.add(maven);
+		commands.add("clean");
+		commands.add("install");
+
+		ProcessBuilder processBuilder = new ProcessBuilder(commands);
+		processBuilder.redirectErrorStream(true);
+		processBuilder.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+		processBuilder.redirectInput(ProcessBuilder.Redirect.INHERIT);
+		processBuilder.directory(new File(directory));
+		try {
+			final Process process = processBuilder.start();
+		} catch (IOException e) {
+			throw new MojoFailureException("Failed to build module", e);
+		}
+
+
 	}
 
 	private void runInFork(Server server) throws MojoExecutionException, MojoFailureException {
